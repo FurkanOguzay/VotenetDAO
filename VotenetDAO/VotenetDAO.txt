@@ -1,0 +1,181 @@
+// actions/voting.ts
+import { defineAction } from '@solana/actions';
+import { PublicKey } from '@solana/web3.js';
+
+export const VotingAction = defineAction({
+  name: 'Voting',
+  state: {
+    yesVotes: 0,
+    noVotes: 0,
+    voters: [] as string[],
+    endTime: 0,
+  },
+  actions: {
+    // Oylama başlatma aksiyonu
+    initialize: defineAction.instruction({
+      accounts: {
+        authority: 'signer',
+      },
+      handler: (ctx, { endTime }: { endTime: number }) => {
+        ctx.state.endTime = endTime;
+      },
+    }),
+
+    // Oy verme aksiyonu
+    vote: defineAction.instruction({
+      accounts: {
+        voter: 'signer',
+      },
+      handler: (ctx, { vote }: { vote: boolean }) => {
+        const voterKey = ctx.accounts.voter.toString();
+        
+        // Kontroller
+        if (Date.now() > ctx.state.endTime) {
+          throw new Error('Oylama süresi dolmuş');
+        }
+        if (ctx.state.voters.includes(voterKey)) {
+          throw new Error('Zaten oy kullanılmış');
+        }
+
+        // Oy kaydetme
+        if (vote) {
+          ctx.state.yesVotes += 1;
+        } else {
+          ctx.state.noVotes += 1;
+        }
+        ctx.state.voters.push(voterKey);
+      },
+    }),
+
+    // Oylama durumunu görüntüleme aksiyonu
+    getVotingState: defineAction.view({
+      handler: (ctx) => {
+        return {
+          yesVotes: ctx.state.yesVotes,
+          noVotes: ctx.state.noVotes,
+          totalVotes: ctx.state.voters.length,
+          isActive: Date.now() <= ctx.state.endTime,
+        };
+      },
+    }),
+  },
+});
+
+// App.tsx
+import React, { useState, useEffect } from 'react';
+import { useActions } from '@solana/actions';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { VotingAction } from './actions/voting';
+
+export function VotingApp() {
+  const wallet = useWallet();
+  const actions = useActions();
+  const [votingState, setVotingState] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    loadVotingState();
+  }, []);
+
+  const loadVotingState = async () => {
+    try {
+      const state = await actions.execute(
+        VotingAction.getVotingState()
+      );
+      setVotingState(state);
+    } catch (error) {
+      console.error('Durum yüklenirken hata:', error);
+    }
+  };
+
+  const handleVote = async (vote: boolean) => {
+    if (!wallet.connected) {
+      alert('Lütfen cüzdanınızı bağlayın!');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      await actions.execute(
+        VotingAction.vote({
+          vote,
+          accounts: {
+            voter: wallet.publicKey,
+          },
+        })
+      );
+      
+      await loadVotingState();
+      alert('Oyunuz başarıyla kaydedildi!');
+    } catch (error) {
+      console.error('Oy verme hatası:', error);
+      alert('Oy verme işlemi başarısız oldu!');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto p-6">
+      <div className="bg-white rounded-lg shadow-lg p-6">
+        <h1 className="text-2xl font-bold mb-6">X Projesi Bütçe Oylaması</h1>
+        
+        <div className="bg-gray-50 p-4 rounded-lg mb-6">
+          <p className="text-lg">
+            Topluluğumuzun geliştirdiği <strong>X Projesi</strong> için 
+            500.000 USD bütçe ayırmayı öneriyoruz. Bu bütçe, proje geliştirme, 
+            pazarlama ve operasyonel giderler için kullanılacaktır.
+          </p>
+        </div>
+
+        {votingState && (
+          <div className="mb-8">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-green-100 p-4 rounded-lg text-center">
+                <h3 className="font-bold mb-2">Evet Oyları</h3>
+                <p className="text-3xl font-bold text-green-600">
+                  {votingState.yesVotes}
+                </p>
+              </div>
+              <div className="bg-red-100 p-4 rounded-lg text-center">
+                <h3 className="font-bold mb-2">Hayır Oyları</h3>
+                <p className="text-3xl font-bold text-red-600">
+                  {votingState.noVotes}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {votingState?.isActive ? (
+          <div className="flex gap-4">
+            <button
+              onClick={() => handleVote(true)}
+              disabled={isLoading}
+              className="flex-1 bg-green-500 hover:bg-green-600 text-white py-3 px-6 rounded-lg disabled:opacity-50"
+            >
+              EVET – Bütçe Ayırılsın
+            </button>
+            <button
+              onClick={() => handleVote(false)}
+              disabled={isLoading}
+              className="flex-1 bg-red-500 hover:bg-red-600 text-white py-3 px-6 rounded-lg disabled:opacity-50"
+            >
+              HAYIR – Bütçe Ayrılmasın
+            </button>
+          </div>
+        ) : (
+          <div className="text-center p-4 bg-yellow-100 rounded-lg">
+            <p className="text-lg font-bold">Oylama süresi dolmuştur</p>
+          </div>
+        )}
+
+        {isLoading && (
+          <div className="mt-4 text-center text-gray-600">
+            <p>İşleminiz gerçekleştiriliyor...</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
